@@ -1,0 +1,516 @@
+#!/usr/bin/python
+
+"""
+mulemu (Multi Emulator Launcher)
+--------------------------------
+Is a simple command line frontend for multiple emulators (and Wine).
+The best thing about it is, that it also works for DOS and Windows games.
+
+  - automatically extracts archives to a temporary directory.
+  - tries to start the correct emulator.
+  - checks afterwards for changes to reapply next time (settings and savegames)
+    and compresses these to a user defined archive file.
+"""
+
+import argparse, os, re, stat, glob, shutil, sys, string, itertools, time, appdirs, subprocess
+
+def start_process(command, args, work_dir):
+    if args:
+        for arg in args:
+            if not command.endswith("="):
+                command += " ";
+
+            if " " in arg and '"' not in arg:
+                command += '"' + arg + '"'
+            else:
+                command += arg
+
+    cwd = os.getcwd()
+    if work_dir:
+        os.chdir(work_dir)
+
+    #print(command)
+    os.system(command)
+
+    if work_dir:
+        os.chdir(cwd)
+
+def empty_directory(path):
+    shutil.rmtree(path, True)
+    os.mkdir(path)
+
+def create_directory(path):
+    os.mkdir(path)
+
+def get_file_name(filename):
+    return os.path.splitext(os.path.basename(filename))[0]
+
+def get_file_extension(filename):
+    return filename.rpartition(".")[2].lower()
+
+def extract_or_copy(filename, destination):
+    filename = os.path.abspath(filename)
+    ext = get_file_extension(filename)
+    if ext == "zip":
+        start_process("unzip", ["-q", filename], destination)
+    elif ext == "rar":
+        start_process("unrar", ["x", "-inul", filename], destination)
+    elif ext == "ace":
+        start_process("unace", ["x", filename], destination)
+    elif ext == "arj":
+        start_process("unarj", ["x", filename], destination)
+    elif ext == "7z":
+        start_process("7z", ["x", "-bd", filename], destination)
+    elif ext in ["tar", "gz", "xz", "bz2"]:
+        start_process("tar" ["xf", filename], destination)
+    else:
+        shutil.copy(filename, destination)
+
+def get_sole_subdirectory(path):
+    files = []
+    for file in glob.glob(os.path.join(path, "*")):
+        files.append(file)
+    for file in glob.glob(os.path.join(path, ".*")):
+        files.append(file)
+    if len(files) == 1 and os.path.isdir(files[0]):
+        return files[0]
+    return None
+
+def remove_sole_subdirectory(path):
+    # when archive contains just a single directory, move everything out
+    if get_sole_subdirectory(path):
+        renamed = path + "-renamed"
+        shutil.move(path, renamed)
+        shutil.move(get_sole_subdirectory(renamed), path)
+        os.rmdir(renamed)
+
+def remove_write_protection(directory):
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            os.chmod(os.path.join(root, file), stat.S_IWRITE | stat.S_IREAD)
+
+def copy_directory(src, dest, filter=None):
+    if os.path.isdir(src):
+        if not os.path.isdir(dest):
+            os.makedirs(dest)
+        files = os.listdir(src)
+        for f in files:
+            if not filter or filter(os.path.join(src, f)):
+                copy_directory(os.path.join(src, f),
+                               os.path.join(dest, f),
+                               filter)
+    else:
+        if not filter or filter(src):
+            shutil.copyfile(src, dest)
+            shutil.copystat(src, dest)
+
+def compare_directories(path, path2):
+    result = []
+    def rec(subpath, subpath2):
+        for file in glob.glob(os.path.join(subpath, "*")):
+            file2 = os.path.join(subpath2, os.path.basename(file))
+            if os.path.isdir(file):
+                rec(file, file2)
+            elif not os.path.exists(file2):
+                result.append(file)
+            else:
+                t1 = os.stat(file).st_mtime
+                t2 = os.stat(file2).st_mtime
+                if t1 != t2:
+                    result.append(file)
+    rec(path, path2)
+    return result
+
+def filter_files(files, filter):
+    result = []
+    for file in files:
+        if filter(file):
+            result.append(file)
+    return result
+
+def copy_files_preserve_subpath(files, basepath, destination):
+    for file in files:
+        rel = os.path.relpath(file, basepath)
+        dest = os.path.join(destination, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy(file, dest)
+
+def compress_directory(path, destination):
+    destination = os.path.abspath(destination)
+    name, extension = os.path.splitext(destination)
+    shutil.make_archive(name, extension[1:], path)
+
+def match_extensions(directory, extensions):
+    pattern = ".*("
+    for extension in extensions:
+        pattern = pattern + "\." + extension + "|"
+    pattern = pattern[:-1] + ")$"
+    expr = re.compile(pattern, re.IGNORECASE)
+
+    files = []
+    for file in os.listdir(directory):
+        if expr.match(file):
+            files.append(file)
+
+    return files
+
+def get_initials(filename):
+    name = get_file_name(filename)
+    return "".join(item[0] for item in name.split())
+
+def stem_filename(filename):
+    name = get_file_name(filename)
+    name = name.lower()
+    # remove everything within [...]
+    name = re.sub("\[[^\]]*\]", "", name)
+    # remove everything within (...)
+    name = re.sub("\([^)]*\)", "", name)
+    # remove special
+    name = re.sub("[-\"&?!]", "", name)
+    # remove space
+    name = re.sub("\s+", " ", name)
+    name = name.strip()
+    return name
+
+def longest_common_substring(s1, s2):
+    m = [[0] * (1 + len(s2)) for i in range(1 + len(s1))]
+    longest, x_longest = 0, 0
+    for x in range(1, 1 + len(s1)):
+        for y in range(1, 1 + len(s2)):
+            if s1[x - 1] == s2[y - 1]:
+                m[x][y] = m[x - 1][y - 1] + 1
+                if m[x][y] > longest:
+                    longest = m[x][y]
+                    x_longest = x
+            else:
+                m[x][y] = 0
+    return s1[x_longest - longest: x_longest]
+
+def rate_executable(filename, target, target_initials):
+    filename = stem_filename(filename)
+    if filename in ["install", "setup", "setsound", "config"]:
+        return 0
+    if filename == "start":
+        return 1
+
+    p1 = len(longest_common_substring(filename, target)) / len(filename)
+    p2 = len(longest_common_substring(filename, target_initials)) / len(filename)
+    score = max(p1, p2) + len(filename) / 100.0
+
+    #print(filename, "in '" + target + "' or '" + target_initials + "':", score)
+    return score
+
+def ecm2bin(directory):
+    for filename in glob.glob(os.path.join(directory, "*.ecm")):
+        start_process("ecm2bin", [filename, get_file_name(filename)], directory)
+
+def is_dos_executable(filename):
+    output = subprocess.Popen(["file", filename],
+        stdout=subprocess.PIPE, bufsize=1).stdout.read()
+    return b"MS-DOS" in output
+
+#------------------------------------------------------------------------------
+
+def start_fsuae(config_dir, work_dir, filename, arguments):
+    # http://fs-uae.net/options
+    floppies = match_extensions(work_dir, ["adf", "adz"])
+    floppies.sort()
+
+    arguments += [
+       "--builtin_configs=0",
+       "--amiga_model=A500", "--accuracy=1", "--floppy_drive_volume=30",
+       "--kickstarts_dir=", os.path.join(config_dir, "fsuae"),
+       "--save_states_dir=", work_dir,
+       "--fullscreen", "--fullscreen_mode=window", "--keep_aspect=1",
+       "--zoom=auto+border", "--shader=scanline-3x",
+       "--fade_in_duration=0", "--fade_out_duration=0",
+       "--floppy_drive_count=2",
+    ]
+
+    arguments += ["--floppy_drive_0=", floppies[0]]
+    if len(floppies) > 1:
+        arguments += ["--floppy_drive_1=", floppies[1]]
+
+    for i in range(0, len(floppies)):
+        arguments += ["--floppy_image_" + str(i) + "=", floppies[i]]
+
+    start_process("fs-uae", arguments, work_dir)
+
+def start_retroarch(config_dir, work_dir, filename, arguments):
+    # https://github.com/libretro/RetroArch/wiki/Using-the-command-line
+    arguments += [
+        "--save=", work_dir,
+        "--savestate=", work_dir,
+        filename,
+    ]
+    os.environ['XDG_CONFIG_HOME'] = config_dir
+    start_process('retroarch', arguments, work_dir)
+
+def start_mednafen(config_dir, work_dir, filename, arguments):
+    # http://mednafen.sourceforge.net/documentation/
+    arguments += [
+        "-filesys.path_sav", work_dir,
+        "-filesys.path_state", work_dir,
+        filename,
+    ]
+    os.environ["MEDNAFEN_HOME"] = os.path.join(config_dir, "mednafen")
+    start_process("mednafen", arguments, work_dir)
+
+def start_vice(config_dir, work_dir, filename, arguments):
+    # http://vice-emu.sourceforge.net/vice_toc.html
+    arguments += [
+        "-fullscreen",
+        "+confirmexit",
+        filename,
+    ]
+    # TODO: select by extension
+    start_process("x64", arguments, work_dir)
+
+def start_stella(config_dir, work_dir, filename, arguments):
+    arguments += [
+        filename,
+    ]
+    start_process("stella", arguments, work_dir)
+
+def start_dosbox(config_dir, work_dir, filename, arguments):
+    if get_file_extension(filename) == "exe":
+        if not is_dos_executable(os.path.join(work_dir, filename)):
+            return
+
+    config = os.path.join(config_dir, "dosbox/default.conf")
+    if os.path.isfile(config):
+        arguments += ["-conf", config]
+
+    arguments += [
+        '-c "mount C \\"' + work_dir + '\\"" -c "C:"',
+        "-exit",
+        filename,
+    ]
+    start_process("dosbox", arguments, work_dir)
+
+def start_wine(config_dir, work_dir, filename, arguments):
+    wine = "wine"
+    if get_file_extension(filename) in ["bat", "cmd"]:
+        wine = "wineconsole"
+
+    arguments += [
+        filename,
+    ]
+    start_process(wine, arguments, work_dir)
+
+#------------------------------------------------------------------------------
+
+filetypes = [
+    {
+        "name": "Commodore Amiga",
+        "extensions": ["adf", "adz"],
+        "emulator": start_fsuae,
+    },
+    {
+        "name": "Nintendo 64",
+        "extensions": ["z64"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/mupen64plus_libretro.so"],
+    },
+    {
+        "name": "Nintendo Entertainment System",
+        "extensions": ["nes"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/libretro-nestopia"],
+    },
+    {
+        "name": "Nintendo Gameboy",
+        "extensions": ["gb", "gbc"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/gambatte_libretro.so"],
+    },
+    {
+        "name": "Nintendo Gameboy Advance",
+        "extensions": ["gba"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/mgba_libretro.so"],
+    },
+    {
+        "name": "Nintendo DS",
+        "extensions": ["nds"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/desmume_libretro.so"],
+    },
+    {
+        "name": "Segs Mega Drive",
+        "extensions": ["gen"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/genesis_plus_gx_libretro.so"],
+    },
+    {
+        "name": "Super Nintendo Entertainment System",
+        "extensions": ["sfc", "smc"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/snes9x_libretro.so"],
+    },
+    {
+        "name": "Sony Playstation",
+        "extensions": ["cue", "pbp", "chd"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/mednafen_psx_libretro.so"],
+    },
+    {
+        "name": "Sega Saturn",
+        "extensions": ["bin"],
+        "emulator": start_retroarch,
+        "arguments": ["-L", "/usr/lib/libretro/yabause_libretro.so"],
+    },
+    {
+        "name": "Atari Lynx",
+        "extensions": ["lnx"],
+        "emulator": start_mednafen,
+    },
+    {
+        "name": "Bandai Wonderswan",
+        "extensions": ["ws", "wsc"],
+        "emulator": start_mednafen,
+    },
+    {
+        "name": "NEC Turbografx-16",
+        "extensions": ["pce"],
+        "emulator": start_mednafen,
+    },
+    {
+        "name": "Neo Geo Pocket",
+        "extensions": ["ngc"],
+        "emulator": start_mednafen,
+    },
+    {
+        "name": "Atari 2600/5200/7800",
+        "extensions": ["a26", "a52", "a78"],
+        "emulator": start_stella,
+    },
+    {
+        "name": "Commodore 64",
+        "extensions": ["crt", "d64", "t64", "tap", "prg"],
+        "emulator": start_vice,
+    },
+    {
+        "name": "MS-DOS",
+        "extensions": ["bat", "exe", "com"],
+        "emulator": start_dosbox,
+    },
+    {
+        "name": "MS-Windows",
+        "extensions": ["exe", "bat", "cmd"],
+        "emulator": start_wine,
+    }
+]
+
+#------------------------------------------------------------------------------
+
+def is_small_file(file):
+    # should be bigger than any savegame file
+    mb = 10
+    return os.path.getsize(file) < (mb << 20)
+
+def is_temporary_file(file):
+    return os.path.basename(file)[:1] == "~"
+
+def extract_files_to_work(filename, work_dir):
+    create_directory(work_dir)
+    extract_or_copy(filename, work_dir)
+    remove_sole_subdirectory(work_dir)
+    remove_write_protection(work_dir)
+    ecm2bin(work_dir)
+
+def clone_work_to_original(work_dir, original_dir):
+    create_directory(original_dir)
+    copy_directory(work_dir, original_dir, filter=lambda x: is_small_file(x))
+
+def apply_delta_to_work(delta_file, delta_dir, work_dir):
+    create_directory(delta_dir)
+    if os.path.exists(delta_file):
+        extract_or_copy(delta_file, delta_dir)
+        copy_directory(delta_dir, work_dir)
+
+def get_best_matching_executable(work_dir, extensions, archive_file):
+    executables = match_extensions(work_dir, extensions)
+    target = stem_filename(archive_file)
+    target_initials = get_initials(target)
+    executables.sort(key=lambda x: -rate_executable(x, target, target_initials))
+    return executables[0]
+
+def start_emulator(config_dir, work_dir, archive_file):
+    filenames = glob.glob(os.path.join(work_dir, "*.*"))
+    for filetype in filetypes:
+        for filename in filenames:
+            if get_file_extension(filename) in filetype.get("extensions"):
+                start = filetype.get("emulator")
+                arguments = filetype.get("arguments") or []
+                filename = get_best_matching_executable(
+                    work_dir, filetype.get("extensions"), archive_file);
+
+                # try to start emulator,
+                # when it ran for some time, it must have been the right one
+                begin = time.time()
+                start(config_dir, work_dir, filename, arguments)
+                end = time.time()
+                if end - begin > 5:
+                    return
+
+                break
+
+def update_delta_file(work_dir, original_dir, delta_dir, delta_file):
+    modified_files = compare_directories(work_dir, original_dir)
+    modified_files = filter_files(modified_files,
+        filter=lambda x: not is_temporary_file(x) and is_small_file(x))
+    if len(modified_files) > 0:
+        empty_directory(delta_dir)
+        copy_files_preserve_subpath(modified_files, work_dir, delta_dir)
+        compress_directory(delta_dir, delta_file)
+
+#------------------------------------------------------------------------------
+
+def main():
+    config_dir = appdirs.user_config_dir("mulemu")
+    temp_dir = "/tmp/mulemu"
+
+    parser = argparse.ArgumentParser(description="Multi Emulator Launcher.")
+    parser.add_argument("file", help="rom file/archive")
+    parser.add_argument("--config", default=config_dir, help="config directory (defaults to '" + config_dir + "')")
+    parser.add_argument("--delta", help="delta file (defaults to an archive within config directory)")
+    parser.add_argument("--no-delta", action='store_false', help="disable delta file")
+    parser.add_argument("--temp", default=temp_dir, help="directory for temporary files (defaults to '" + temp_dir + "')")
+    args = parser.parse_args()
+
+    filename = os.path.expanduser(args.file)
+    config_dir = os.path.expanduser(args.config)
+    temp_dir = os.path.expanduser(args.temp)
+    work_dir = os.path.join(temp_dir, "work")
+    original_dir = os.path.join(temp_dir, "orig")
+    delta_dir = os.path.join(temp_dir, "delta")
+
+    delta_file = None
+    if args.no_delta != False:
+        if not args.delta:
+            subdir_filename = os.path.join(
+                os.path.basename(os.path.dirname(filename)),
+                get_file_name(filename));
+            delta_file = os.path.join(config_dir, "delta", subdir_filename + ".zip")
+        else:
+            delta_file = os.path.expanduser(args.delta)
+
+    empty_directory(temp_dir)
+    extract_files_to_work(filename, work_dir)
+
+    if delta_file:
+        clone_work_to_original(work_dir, original_dir)
+        apply_delta_to_work(delta_file, delta_dir, work_dir)
+
+    start_emulator(config_dir, work_dir, filename)
+
+    if delta_file:
+        update_delta_file(work_dir, original_dir, delta_dir, delta_file)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(e)
+        exit(1)
