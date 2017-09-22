@@ -42,6 +42,10 @@ def empty_directory(path):
 def create_directory(path):
     os.mkdir(path)
 
+def touch(fname, times=None):
+    with open(fname, 'a'):
+        os.utime(fname, times)
+
 def get_file_name(filename):
     return os.path.splitext(os.path.basename(filename))[0]
 
@@ -469,7 +473,7 @@ def update_delta_file(work_dir, original_dir, delta_dir, delta_file):
 
 def main():
     config_dir = appdirs.user_config_dir("mulemu")
-    temp_dir = "/tmp/mulemu"
+    temp_dir = "/tmp/"
 
     parser = argparse.ArgumentParser(description="Multi Emulator Launcher.")
     parser.add_argument("file", help="rom file/archive")
@@ -481,10 +485,11 @@ def main():
 
     filename = os.path.expanduser(args.file)
     config_dir = os.path.expanduser(args.config)
-    temp_dir = os.path.expanduser(args.temp)
+    temp_dir = os.path.join(os.path.expanduser(args.temp), "mulemu")
     work_dir = os.path.join(temp_dir, "work")
     original_dir = os.path.join(temp_dir, "orig")
     delta_dir = os.path.join(temp_dir, "delta")
+    prev_filename_token = os.path.join(temp_dir, get_file_name(filename))
 
     delta_file = None
     if args.no_delta != False:
@@ -496,12 +501,14 @@ def main():
         else:
             delta_file = os.path.expanduser(args.delta)
 
-    empty_directory(temp_dir)
-    extract_files_to_work(filename, work_dir)
+    if not os.path.isfile(prev_filename_token):
+        empty_directory(temp_dir)
+        touch(prev_filename_token)
+        extract_files_to_work(filename, work_dir)
 
-    if delta_file:
-        clone_work_to_original(work_dir, original_dir)
-        apply_delta_to_work(delta_file, delta_dir, work_dir)
+        if delta_file:
+            clone_work_to_original(work_dir, original_dir)
+            apply_delta_to_work(delta_file, delta_dir, work_dir)
 
     start_emulator(config_dir, work_dir, filename)
 
