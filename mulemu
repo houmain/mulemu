@@ -66,7 +66,7 @@ def extract_or_copy(filename, destination):
     elif ext == "7z":
         start_process("7z", ["x", "-bd", filename], destination)
     elif ext in ["tar", "gz", "xz", "bz2"]:
-        start_process("tar" ["xf", filename], destination)
+        start_process("tar", ["xf", filename], destination)
     else:
         shutil.copy(filename, destination)
 
@@ -172,7 +172,7 @@ def stem_filename(filename):
     # remove special
     name = re.sub("[-\"&?!]", "", name)
     # remove space
-    name = re.sub("\s+", " ", name)
+    name = re.sub("\s+", "", name)
     name = name.strip()
     return name
 
@@ -199,19 +199,28 @@ def rate_executable(filename, target, target_initials):
 
     p1 = len(longest_common_substring(filename, target)) / len(filename)
     p2 = len(longest_common_substring(filename, target_initials)) / len(filename)
-    score = max(p1, p2) + len(filename) / 100.0
+    score = max(p1, p2) + len(filename) / 100
 
     #print(filename, "in '" + target + "' or '" + target_initials + "':", score)
     return score
 
+def insensitive_glob(pattern):
+    def either(c):
+        return '[%s%s]'%(c.lower(),c.upper()) if c.isalpha() else c
+    return glob.glob(''.join(map(either, pattern)))
+
 def ecm2bin(directory):
-    for filename in glob.glob(os.path.join(directory, "*.ecm")):
+    for filename in insensitive_glob(os.path.join(directory, "*.ecm")):
         start_process("ecm2bin", [filename, get_file_name(filename)], directory)
 
 def is_dos_executable(filename):
     output = subprocess.Popen(["file", filename],
         stdout=subprocess.PIPE, bufsize=1).stdout.read()
     return b"MS-DOS" in output
+
+def import_registry_keys(directory):
+    for filename in insensitive_glob(os.path.join(directory, "*.reg")):
+        start_process("wine", ["regedit", filename], directory)
 
 #------------------------------------------------------------------------------
 
@@ -293,6 +302,8 @@ def start_dosbox(config_dir, work_dir, filename, arguments):
     start_process("dosbox", arguments, work_dir)
 
 def start_wine(config_dir, work_dir, filename, arguments):
+    import_registry_keys(work_dir)
+
     wine = "wine"
     if get_file_extension(filename) in ["bat", "cmd"]:
         wine = "wineconsole"
