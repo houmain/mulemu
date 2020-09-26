@@ -10,7 +10,7 @@ license=('GPL')
 depends=('python')
 optdepends=(
   'dosbox' 'fs-uae' 'retroarch' 'wine'
-  'unzip' 'unrar' 'unace' 'unarj' 'ecm-tools')
+  'zstd' 'unzip' 'unrar' 'unace' 'unarj' 'ecm-tools')
 makedepends=('git')
 conflicts=(${_pkgname})
 provides=(${_pkgname})

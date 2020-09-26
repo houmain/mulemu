@@ -14,7 +14,7 @@ The best thing about it is, that it also works for DOS and Windows games.
 
 import argparse, os, re, stat, glob, shutil, sys, string, itertools, time, appdirs, subprocess
 
-def start_process(command, args, work_dir):
+def start_process(command, args, work_dir=False):
     if args:
         for arg in args:
             if not command.endswith("="):
@@ -29,7 +29,7 @@ def start_process(command, args, work_dir):
     if work_dir:
         os.chdir(work_dir)
 
-    #print(command)
+    print(command)
     os.system(command)
 
     if work_dir:
@@ -46,15 +46,21 @@ def touch(fname, times=None):
     with open(fname, 'a'):
         os.utime(fname, times)
 
-def get_file_name(filename):
-    return os.path.splitext(os.path.basename(filename))[0]
-
 def get_file_extension(filename):
-    return filename.rpartition(".")[2].lower()
+    ext = filename.rpartition(".")[2].lower()
+    if filename[0:-len(ext)].endswith(".tar."):
+        ext = "tar." + ext
+    return ext
+
+def get_file_name(filename):
+    filename = os.path.basename(filename)
+    ext = get_file_extension(filename)
+    return filename[0:-(len(ext) + 1)]
 
 def extract_or_copy(filename, destination):
     filename = os.path.abspath(filename)
     ext = get_file_extension(filename)
+
     if ext == "zip":
         start_process("unzip", ["-q", filename], destination)
     elif ext == "rar":
@@ -65,8 +71,12 @@ def extract_or_copy(filename, destination):
         start_process("unarj", ["x", filename], destination)
     elif ext == "7z":
         start_process("7z", ["x", "-bd", filename], destination)
-    elif ext in ["tar", "gz", "xz", "bz2"]:
-        start_process("tar", ["xf", filename], destination)
+    elif ext == "zst":
+        start_process("unzstd", [filename, "--output-dir-flat=", destination])
+    elif ext == "tar.zst":
+        start_process("pzstd", ["-dc", filename, "|", "tar", "x"], destination)
+    elif ext.startswith("tar"):
+        start_process("tar", ["-xf", filename], destination)
     else:
         shutil.copy(filename, destination)
 
@@ -245,15 +255,17 @@ def start_fsuae(config_dir, work_dir, filename, system):
     start_process("fs-uae", arguments, work_dir)
 
 def start_retroarch(config_dir, work_dir, filename, system):
-    # https://github.com/libretro/RetroArch/wiki/Using-the-command-line
+    # https://docs.libretro.com/
 
     core = os.path.join(config_dir, "retroarch", "cores", system.get("core") + ".so")
     if not os.path.isfile(core):
-        raise Exception("The libretro core for " + system.get("name") +
+        print("The libretro core for " + system.get("name") +
             " was not found at:\n" + core +
             "\nPlease put it there (or create a symlink).")
+        return
 
     arguments = [
+        "-v",
         "--libretro=", core,
         "--save=", work_dir,
         "--savestate=", work_dir,
