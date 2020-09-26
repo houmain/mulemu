@@ -224,19 +224,14 @@ def import_registry_keys(directory):
 
 #------------------------------------------------------------------------------
 
-def start_fsuae(config_dir, work_dir, filename, arguments):
+def start_fsuae(config_dir, work_dir, filename, system):
     # http://fs-uae.net/options
     floppies = match_extensions(work_dir, ["adf", "adz"])
     floppies.sort()
 
-    arguments += [
-       "--builtin_configs=0",
-       "--amiga_model=A500", "--accuracy=1", "--floppy_drive_volume=30",
-       "--kickstarts_dir=", os.path.join(config_dir, "fsuae"),
+    arguments = [
+       "--base_dir=", os.path.join(config_dir, "fsuae"),
        "--save_states_dir=", work_dir,
-       "--fullscreen", "--fullscreen_mode=window", "--keep_aspect=1",
-       "--zoom=auto+border", "--shader=scanline-3x",
-       "--fade_in_duration=0", "--fade_out_duration=0",
        "--floppy_drive_count=2",
     ]
 
@@ -249,9 +244,17 @@ def start_fsuae(config_dir, work_dir, filename, arguments):
 
     start_process("fs-uae", arguments, work_dir)
 
-def start_retroarch(config_dir, work_dir, filename, arguments):
+def start_retroarch(config_dir, work_dir, filename, system):
     # https://github.com/libretro/RetroArch/wiki/Using-the-command-line
-    arguments += [
+
+    core = os.path.join(config_dir, "retroarch", "cores", system.get("core") + ".so")
+    if not os.path.isfile(core):
+        raise Exception("The libretro core for " + system.get("name") +
+            " was not found at:\n" + core +
+            "\nPlease put it there (or create a symlink).")
+
+    arguments = [
+        "--libretro=", core,
         "--save=", work_dir,
         "--savestate=", work_dir,
         filename,
@@ -259,161 +262,142 @@ def start_retroarch(config_dir, work_dir, filename, arguments):
     os.environ['XDG_CONFIG_HOME'] = config_dir
     start_process('retroarch', arguments, work_dir)
 
-def start_mednafen(config_dir, work_dir, filename, arguments):
-    # http://mednafen.sourceforge.net/documentation/
-    arguments += [
-        "-filesys.path_sav", work_dir,
-        "-filesys.path_state", work_dir,
-        filename,
-    ]
-    os.environ["MEDNAFEN_HOME"] = os.path.join(config_dir, "mednafen")
-    start_process("mednafen", arguments, work_dir)
-
-def start_vice(config_dir, work_dir, filename, arguments):
-    # http://vice-emu.sourceforge.net/vice_toc.html
-    arguments += [
-        "-fullscreen",
-        "+confirmexit",
-        filename,
-    ]
-    # TODO: select by extension
-    start_process("x64", arguments, work_dir)
-
-def start_stella(config_dir, work_dir, filename, arguments):
-    arguments += [
-        filename,
-    ]
-    start_process("stella", arguments, work_dir)
-
-def start_dosbox(config_dir, work_dir, filename, arguments):
+def start_dosbox(config_dir, work_dir, filename, system):
     if get_file_extension(filename) == "exe":
         if not is_dos_executable(os.path.join(work_dir, filename)):
             return
 
-    config = os.path.join(config_dir, "dosbox/default.conf")
-    if os.path.isfile(config):
-        arguments += ["-conf", config]
-
-    arguments += [
+    arguments = [
         '-c "mount C \\"' + work_dir + '\\"" -c "C:"',
         "-exit",
         filename,
     ]
+
+    config = os.path.join(config_dir, "dosbox", "default.conf")
+    if os.path.isfile(config):
+        arguments += ["-conf", config]
+
     start_process("dosbox", arguments, work_dir)
 
-def start_wine(config_dir, work_dir, filename, arguments):
+def start_wine(config_dir, work_dir, filename, system):
     import_registry_keys(work_dir)
 
     wine = "wine"
     if get_file_extension(filename) in ["bat", "cmd"]:
         wine = "wineconsole"
 
-    arguments += [
+    arguments = [
         filename,
     ]
     start_process(wine, arguments, work_dir)
 
 #------------------------------------------------------------------------------
 
-filetypes = [
+SYSTEMS = [
     {
         "name": "Commodore Amiga",
         "extensions": ["adf", "adz"],
-        "emulator": start_fsuae,
+        "start": start_fsuae,
     },
     {
         "name": "Nintendo 64",
         "extensions": ["z64"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/mupen64plus_libretro.so"],
+        "start": start_retroarch,
+        "core": "nintendo-64",
     },
     {
         "name": "Nintendo Entertainment System",
         "extensions": ["nes"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/libretro-nestopia"],
+        "start": start_retroarch,
+        "core": "nintendo",
     },
     {
         "name": "Nintendo Gameboy",
         "extensions": ["gb", "gbc"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/gambatte_libretro.so"],
+        "start": start_retroarch,
+        "core": "gameboy",
     },
     {
         "name": "Nintendo Gameboy Advance",
         "extensions": ["gba"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/mgba_libretro.so"],
+        "start": start_retroarch,
+        "core": "gameboy-advance",
     },
     {
         "name": "Nintendo DS",
         "extensions": ["nds"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/desmume_libretro.so"],
+        "start": start_retroarch,
+        "core": "nintendo-ds",
     },
     {
         "name": "Segs Mega Drive",
         "extensions": ["gen"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/genesis_plus_gx_libretro.so"],
+        "start": start_retroarch,
+        "core": "sega-mega-drive",
     },
     {
         "name": "Super Nintendo Entertainment System",
         "extensions": ["sfc", "smc"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/snes9x_libretro.so"],
+        "start": start_retroarch,
+        "core": "super-nintendo",
     },
     {
         "name": "Sony Playstation",
         "extensions": ["cue", "pbp", "chd"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/mednafen_psx_libretro.so"],
+        "start": start_retroarch,
+        "core": "playstation",
     },
     {
         "name": "Sega Saturn",
         "extensions": ["bin"],
-        "emulator": start_retroarch,
-        "arguments": ["-L", "/usr/lib/libretro/yabause_libretro.so"],
+        "start": start_retroarch,
+        "core": "sega-saturn",
     },
     {
         "name": "Atari Lynx",
         "extensions": ["lnx"],
-        "emulator": start_mednafen,
+        "start": start_retroarch,
+        "core": "atari-lynx",
     },
     {
         "name": "Bandai Wonderswan",
         "extensions": ["ws", "wsc"],
-        "emulator": start_mednafen,
+        "start": start_retroarch,
+        "core": "wonderswan",
     },
     {
         "name": "NEC Turbografx-16",
         "extensions": ["pce"],
-        "emulator": start_mednafen,
+        "start": start_retroarch,
+        "core": "turbografx-16",
     },
     {
         "name": "Neo Geo Pocket",
         "extensions": ["ngc"],
-        "emulator": start_mednafen,
+        "start": start_retroarch,
+        "core": "neo-geo-pocket",
     },
     {
         "name": "Atari 2600/5200/7800",
         "extensions": ["a26", "a52", "a78"],
-        "emulator": start_stella,
+        "start": start_retroarch,
+        "core": "atari",
     },
     {
         "name": "Commodore 64",
         "extensions": ["crt", "d64", "t64", "tap", "prg"],
-        "emulator": start_vice,
+        "start": start_retroarch,
+        "core": "commodore-64",
     },
     {
         "name": "MS-DOS",
         "extensions": ["bat", "exe", "com"],
-        "emulator": start_dosbox,
+        "start": start_dosbox,
     },
     {
         "name": "MS-Windows",
         "extensions": ["exe", "bat", "cmd"],
-        "emulator": start_wine,
+        "start": start_wine,
     }
 ]
 
@@ -453,18 +437,18 @@ def get_best_matching_executable(work_dir, extensions, archive_file):
 
 def start_emulator(config_dir, work_dir, archive_file):
     filenames = glob.glob(os.path.join(work_dir, "*.*"))
-    for filetype in filetypes:
+    for system in SYSTEMS:
         for filename in filenames:
-            if get_file_extension(filename) in filetype.get("extensions"):
-                start = filetype.get("emulator")
-                arguments = filetype.get("arguments") or []
+            extensions = system.get("extensions")
+            if get_file_extension(filename) in extensions:
+                start = system.get("start")
                 filename = get_best_matching_executable(
-                    work_dir, filetype.get("extensions"), archive_file);
+                    work_dir, extensions, archive_file);
 
                 # try to start emulator,
                 # when it ran for some time, it must have been the right one
                 begin = time.time()
-                start(config_dir, work_dir, filename, arguments)
+                start(config_dir, work_dir, filename, system)
                 end = time.time()
                 if end - begin > 5:
                     return

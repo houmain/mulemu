@@ -9,7 +9,7 @@ url="https://github.com/houmaster/mulemu"
 license=('GPL')
 depends=('python')
 optdepends=(
-  'dosbox' 'fs-uae' 'mednafen' 'retroarch' 'wine'
+  'dosbox' 'fs-uae' 'retroarch' 'wine'
   'unzip' 'unrar' 'unace' 'unarj' 'ecm-tools')
 makedepends=('git')
 conflicts=(${_pkgname})
