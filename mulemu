@@ -205,7 +205,7 @@ def rate_executable(filename, target, target_initials):
     if filename in ["install", "setup", "setsound", "config"]:
         return 0
     if filename == "start":
-        return 1
+        return 2
 
     p1 = len(longest_common_substring(filename, target)) / len(filename)
     p2 = len(longest_common_substring(filename, target_initials)) / len(filename)
@@ -236,7 +236,7 @@ def import_registry_keys(directory):
 
 def start_fsuae(config_dir, work_dir, filename, system):
     # http://fs-uae.net/options
-    floppies = match_extensions(work_dir, ["adf", "adz"])
+    floppies = match_extensions(work_dir, ["adf", "adz", "ipf"])
     floppies.sort()
 
     arguments = [
@@ -308,7 +308,7 @@ def start_wine(config_dir, work_dir, filename, system):
 SYSTEMS = [
     {
         "name": "Commodore Amiga",
-        "extensions": ["adf", "adz"],
+        "extensions": ["adf", "adz", "ipf"],
         "start": start_fsuae,
     },
     {

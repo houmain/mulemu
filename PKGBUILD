@@ -5,16 +5,16 @@ pkgver=r2.9c924f0
 pkgrel=1
 pkgdesc='A simple command line frontend for multiple emulators (and Wine)'
 arch=(any)
-url="https://github.com/houmaster/mulemu"
+url="https://github.com/houmain/mulemu"
 license=('GPL')
-depends=('python')
+depends=('python' 'python-appdirs')
 optdepends=(
-  'dosbox' 'fs-uae' 'retroarch' 'wine'
-  'zstd' 'unzip' 'unrar' 'unace' 'unarj' 'ecm-tools')
+  'dosbox' 'fs-uae' 'mednafen' 'retroarch' 'wine'
+  'unzip' 'unrar' 'unace' 'unarj' 'ecm-tools')
 makedepends=('git')
 conflicts=(${_pkgname})
 provides=(${_pkgname})
-source=('git+https://github.com/houmaster/mulemu.git')
+source=('git+https://github.com/houmain/mulemu.git')
 md5sums=(SKIP)
 
 pkgver() {
